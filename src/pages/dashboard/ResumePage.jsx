@@ -1,0 +1,447 @@
+// Resume page — upload, analyze, improve, download
+import { useState, useRef } from 'react'
+import { motion } from 'framer-motion'
+import { Upload, FileText, Download, Sparkles, AlertCircle, CheckCircle, BarChart3, RefreshCw, Palette } from 'lucide-react'
+import DashboardLayout from '@/layouts/DashboardLayout'
+import Card from '@/components/ui/Card'
+import Button from '@/components/ui/Button'
+import Badge from '@/components/ui/Badge'
+import { analyzeResume, improveResume } from '@/lib/openai'
+import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/hooks/useAuth'
+import toast from 'react-hot-toast'
+import jsPDF from 'jspdf'
+
+// Resume PDF themes
+const RESUME_THEMES = [
+  {
+    id: 'classic',
+    label: 'Classic',
+    desc: 'Clean black & white',
+    preview: 'bg-white',
+    headerBg: [255, 255, 255],
+    headerText: [0, 0, 0],
+    accentColor: [0, 0, 0],
+    bodyText: [40, 40, 40],
+    lineColor: [200, 200, 200],
+  },
+  {
+    id: 'modern',
+    label: 'Modern',
+    desc: 'Violet accents',
+    preview: 'bg-gradient-to-r from-violet-600 to-purple-600',
+    headerBg: [100, 50, 180],
+    headerText: [255, 255, 255],
+    accentColor: [100, 50, 180],
+    bodyText: [30, 30, 30],
+    lineColor: [180, 150, 230],
+  },
+  {
+    id: 'executive',
+    label: 'Executive',
+    desc: 'Navy & gold',
+    preview: 'bg-gradient-to-r from-blue-900 to-blue-700',
+    headerBg: [15, 40, 90],
+    headerText: [255, 255, 255],
+    accentColor: [15, 40, 90],
+    bodyText: [20, 20, 60],
+    lineColor: [180, 160, 100],
+  },
+  {
+    id: 'minimal',
+    label: 'Minimal',
+    desc: 'Gray & elegant',
+    preview: 'bg-gradient-to-r from-gray-400 to-gray-600',
+    headerBg: [245, 245, 245],
+    headerText: [50, 50, 50],
+    accentColor: [100, 100, 100],
+    bodyText: [60, 60, 60],
+    lineColor: [200, 200, 200],
+  },
+  {
+    id: 'bold',
+    label: 'Bold',
+    desc: 'Dark & impactful',
+    preview: 'bg-gradient-to-r from-gray-900 to-gray-700',
+    headerBg: [20, 20, 30],
+    headerText: [255, 255, 255],
+    accentColor: [20, 20, 30],
+    bodyText: [30, 30, 40],
+    lineColor: [80, 80, 100],
+  },
+]
+
+export default function ResumePage() {
+  const { user } = useAuth()
+  const [resumeText, setResumeText] = useState('')
+  const [analysis, setAnalysis] = useState(null)
+  const [improved, setImproved] = useState('')
+  const [analyzing, setAnalyzing] = useState(false)
+  const [improving, setImproving] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const [resumeTheme, setResumeTheme] = useState('classic')
+  const fileRef = useRef(null)
+
+  async function handleFile(file) {
+    if (!file) return
+    if (file.type !== 'application/pdf' && !file.type.includes('text')) {
+      return toast.error('Please upload a PDF or text file')
+    }
+
+    const reader = new FileReader()
+    reader.onload = (e) => setResumeText(e.target.result)
+    reader.readAsText(file)
+    toast.success('Resume loaded! Click "Analyze" to get your ATS score.')
+  }
+
+  async function handleAnalyze() {
+    if (!resumeText.trim()) return toast.error('Please paste or upload your resume first')
+    setAnalyzing(true)
+    try {
+      const result = await analyzeResume(resumeText)
+      setAnalysis(result)
+      // Save ATS score to database
+      if (user) {
+        await supabase.from('resumes').upsert({
+          user_id: user.id,
+          ats_score: result.score,
+          content: resumeText.substring(0, 5000),
+          analysis: result,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id' })
+      }
+      toast.success(`ATS Score: ${result.score}/100`)
+    } catch (err) {
+      toast.error(err.message || 'Analysis failed. Check your OpenAI API key.')
+    }
+    setAnalyzing(false)
+  }
+
+  async function handleImprove() {
+    if (!resumeText.trim()) return toast.error('Please paste or upload your resume first')
+    setImproving(true)
+    try {
+      const result = await improveResume(resumeText)
+      setImproved(result)
+      toast.success('Resume improved by AI!')
+    } catch (err) {
+      toast.error(err.message || 'Improvement failed')
+    }
+    setImproving(false)
+  }
+
+  function downloadImproved() {
+    const theme = RESUME_THEMES.find(t => t.id === resumeTheme) || RESUME_THEMES[0]
+    const content = improved || resumeText
+    const doc = new jsPDF()
+    const pageW = doc.internal.pageSize.getWidth()
+    const pageH = doc.internal.pageSize.getHeight()
+    const margin = 15
+    const contentW = pageW - margin * 2
+
+    // Header bar
+    doc.setFillColor(...theme.headerBg)
+    doc.rect(0, 0, pageW, 28, 'F')
+
+    // Name / title in header
+    doc.setTextColor(...theme.headerText)
+    doc.setFontSize(18)
+    doc.setFont('helvetica', 'bold')
+    const firstLine = content.split('\n')[0].trim() || 'Resume'
+    doc.text(firstLine.substring(0, 50), margin, 13)
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'normal')
+    doc.text('Generated by CareerDNA', margin, 21)
+
+    // Accent line under header
+    doc.setDrawColor(...theme.lineColor)
+    doc.setLineWidth(0.5)
+    doc.line(0, 28, pageW, 28)
+
+    // Body text
+    doc.setTextColor(...theme.bodyText)
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+
+    const bodyContent = content.split('\n').slice(1).join('\n')
+    const lines = doc.splitTextToSize(bodyContent, contentW)
+
+    let y = 36
+    const lineH = 5.5
+    const bottomMargin = 20
+
+    lines.forEach((line) => {
+      if (y + lineH > pageH - bottomMargin) {
+        doc.addPage()
+        y = margin
+
+        // Accent stripe on new pages
+        doc.setFillColor(...theme.accentColor)
+        doc.rect(0, 0, 4, pageH, 'F')
+      }
+
+      // Section headers — lines ending in ':' or all-caps short lines
+      const trimmed = line.trim()
+      if (trimmed.endsWith(':') && trimmed.length < 40) {
+        doc.setFont('helvetica', 'bold')
+        doc.setTextColor(...theme.accentColor)
+        doc.text(line, margin, y)
+        // Underline
+        doc.setDrawColor(...theme.lineColor)
+        doc.setLineWidth(0.3)
+        doc.line(margin, y + 1, pageW - margin, y + 1)
+        doc.setFont('helvetica', 'normal')
+        doc.setTextColor(...theme.bodyText)
+      } else {
+        doc.text(line, margin, y)
+      }
+
+      y += lineH
+    })
+
+    // Footer on each page
+    const totalPages = doc.internal.getNumberOfPages()
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i)
+      doc.setFontSize(7)
+      doc.setTextColor(150, 150, 150)
+      doc.text(`Page ${i} of ${totalPages}  |  careerdna.app`, pageW / 2, pageH - 8, { align: 'center' })
+    }
+
+    doc.save(`careerdna-resume-${theme.id}.pdf`)
+    toast.success(`Resume downloaded! (${theme.label} theme)`)
+  }
+
+  const scoreColor = !analysis ? 'white' :
+    analysis.score >= 80 ? 'green' :
+    analysis.score >= 60 ? 'yellow' : 'red'
+
+  return (
+    <DashboardLayout>
+      <div className="mb-8">
+        <h1 className="text-3xl font-black text-white mb-1">Resume</h1>
+        <p className="text-white/40">Upload your resume, get AI analysis, and download an optimized version</p>
+      </div>
+
+      {/* Resume PDF Theme picker */}
+      <Card animate className="mb-6">
+        <h2 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
+          <Palette size={18} className="text-violet-400" />
+          Resume PDF Theme
+        </h2>
+        <p className="text-white/30 text-sm mb-4">Choose a style for your downloaded PDF resume</p>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          {RESUME_THEMES.map(theme => (
+            <button
+              key={theme.id}
+              onClick={() => setResumeTheme(theme.id)}
+              className={`rounded-xl p-3 border text-left transition-all ${
+                resumeTheme === theme.id
+                  ? 'border-violet-500 bg-violet-500/10 ring-1 ring-violet-500/30'
+                  : 'border-white/10 hover:border-white/20 hover:bg-white/[0.02]'
+              }`}
+            >
+              <div className={`w-full h-8 rounded-lg ${theme.preview} mb-2`} />
+              <p className={`text-sm font-semibold ${resumeTheme === theme.id ? 'text-white' : 'text-white/60'}`}>{theme.label}</p>
+              <p className="text-white/30 text-xs">{theme.desc}</p>
+            </button>
+          ))}
+        </div>
+      </Card>
+
+      <div className="grid lg:grid-cols-2 gap-6">
+        {/* Left: Upload + paste */}
+        <div className="space-y-6">
+          {/* File upload zone */}
+          <Card animate>
+            <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <Upload size={18} className="text-violet-400" />
+              Upload Resume
+            </h2>
+
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files[0]) }}
+              onClick={() => fileRef.current?.click()}
+              className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-200 ${
+                dragOver
+                  ? 'border-violet-500 bg-violet-500/10'
+                  : 'border-white/10 hover:border-violet-500/50 hover:bg-white/[0.02]'
+              }`}
+            >
+              <FileText size={40} className="text-white/20 mx-auto mb-3" />
+              <p className="text-white/60 font-medium mb-1">Drop your resume here</p>
+              <p className="text-white/30 text-sm">PDF or TXT format</p>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".pdf,.txt"
+                className="hidden"
+                onChange={(e) => handleFile(e.target.files[0])}
+              />
+            </div>
+          </Card>
+
+          {/* Paste text */}
+          <Card animate delay={0.1}>
+            <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <FileText size={18} className="text-blue-400" />
+              Or Paste Resume Text
+            </h2>
+            <textarea
+              value={resumeText}
+              onChange={(e) => setResumeText(e.target.value)}
+              placeholder="Paste your resume content here..."
+              className="w-full h-48 bg-white/5 border border-white/10 rounded-xl p-4 text-white/70 placeholder-white/20 text-sm resize-none focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/30 transition-all"
+            />
+            <p className="text-white/20 text-xs mt-2">{resumeText.length} characters</p>
+
+            <div className="flex gap-3 mt-4">
+              <Button onClick={handleAnalyze} loading={analyzing} fullWidth>
+                <BarChart3 size={16} />
+                Analyze ATS Score
+              </Button>
+              <Button onClick={handleImprove} loading={improving} variant="outline" fullWidth>
+                <Sparkles size={16} />
+                AI Improve
+              </Button>
+            </div>
+          </Card>
+        </div>
+
+        {/* Right: Results */}
+        <div className="space-y-6">
+          {/* ATS Score */}
+          {analysis && (
+            <Card animate className="relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-br from-violet-600/5 to-blue-600/5" />
+              <div className="relative z-10">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-lg font-bold text-white">ATS Analysis</h2>
+                  <Badge color={scoreColor} dot>
+                    Score: {analysis.score}/100
+                  </Badge>
+                </div>
+
+                {/* Score bar */}
+                <div className="mb-6">
+                  <div className="flex justify-between text-sm mb-2">
+                    <span className="text-white/40">ATS Score</span>
+                    <span className="text-white font-bold">{analysis.score}%</span>
+                  </div>
+                  <div className="h-3 bg-white/5 rounded-full overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${analysis.score}%` }}
+                      transition={{ duration: 1, ease: 'easeOut' }}
+                      className={`h-3 rounded-full ${
+                        analysis.score >= 80 ? 'bg-gradient-to-r from-emerald-500 to-teal-500' :
+                        analysis.score >= 60 ? 'bg-gradient-to-r from-yellow-500 to-amber-500' :
+                        'bg-gradient-to-r from-red-500 to-rose-500'
+                      }`}
+                    />
+                  </div>
+                </div>
+
+                {/* Strengths */}
+                {analysis.strengths?.length > 0 && (
+                  <div className="mb-4">
+                    <h3 className="text-sm font-semibold text-emerald-400 mb-2 flex items-center gap-1.5">
+                      <CheckCircle size={14} /> Strengths
+                    </h3>
+                    <ul className="space-y-1">
+                      {analysis.strengths.map((s, i) => (
+                        <li key={i} className="text-white/50 text-sm flex items-start gap-2">
+                          <span className="text-emerald-400 mt-0.5">·</span> {s}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Weaknesses */}
+                {analysis.weaknesses?.length > 0 && (
+                  <div className="mb-4">
+                    <h3 className="text-sm font-semibold text-red-400 mb-2 flex items-center gap-1.5">
+                      <AlertCircle size={14} /> Areas to Improve
+                    </h3>
+                    <ul className="space-y-1">
+                      {analysis.weaknesses.map((w, i) => (
+                        <li key={i} className="text-white/50 text-sm flex items-start gap-2">
+                          <span className="text-red-400 mt-0.5">·</span> {w}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Suggestions */}
+                {analysis.suggestions?.length > 0 && (
+                  <div className="mb-4">
+                    <h3 className="text-sm font-semibold text-violet-400 mb-2 flex items-center gap-1.5">
+                      <Sparkles size={14} /> Suggestions
+                    </h3>
+                    <ul className="space-y-1">
+                      {analysis.suggestions.map((s, i) => (
+                        <li key={i} className="text-white/50 text-sm flex items-start gap-2">
+                          <span className="text-violet-400 mt-0.5">→</span> {s}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Missing keywords */}
+                {analysis.keywords?.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-yellow-400 mb-2">Missing Keywords</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {analysis.keywords.map((kw, i) => (
+                        <Badge key={i} color="yellow">{kw}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
+
+          {/* Improved resume */}
+          {improved && (
+            <Card animate>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Sparkles size={18} className="text-violet-400" />
+                  AI-Improved Resume
+                </h2>
+                <div className="flex gap-2">
+                  <Button onClick={() => handleImprove()} variant="ghost" size="sm">
+                    <RefreshCw size={14} />
+                  </Button>
+                  <Button onClick={downloadImproved} size="sm" variant="outline">
+                    <Download size={14} />
+                    Download PDF ({RESUME_THEMES.find(t => t.id === resumeTheme)?.label})
+                  </Button>
+                </div>
+              </div>
+              <div className="bg-white/[0.02] rounded-xl p-4 max-h-80 overflow-y-auto">
+                <pre className="text-white/60 text-xs leading-relaxed whitespace-pre-wrap font-mono">
+                  {improved}
+                </pre>
+              </div>
+            </Card>
+          )}
+
+          {!analysis && !improved && (
+            <Card animate delay={0.2} className="text-center py-12">
+              <FileText size={48} className="text-white/10 mx-auto mb-4" />
+              <p className="text-white/30">Upload or paste your resume to get started</p>
+              <p className="text-white/20 text-sm mt-2">You'll see your ATS score, strengths, and AI improvements here</p>
+            </Card>
+          )}
+        </div>
+      </div>
+    </DashboardLayout>
+  )
+}
