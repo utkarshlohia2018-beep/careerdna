@@ -83,14 +83,80 @@ export async function improveResume(resumeText) {
   const messages = [
     {
       role: 'system',
-      content: 'You are an expert resume writer. Improve the resume content to be more impactful, use stronger action verbs, quantify achievements, and optimize for ATS. Maintain the same structure but improve the language.',
+      content: 'You are an expert resume writer. Rewrite the resume content to be more impactful: use strong action verbs, quantify achievements, remove fluff, and optimize every bullet point for ATS. Keep the same information but make it significantly stronger.',
     },
     {
       role: 'user',
-      content: `Improve this resume section:\n\n${resumeText}`,
+      content: `Rewrite and improve this resume. Make every line impactful:\n\n${resumeText}`,
     },
   ]
-  return callOpenAI(messages, { maxTokens: 2000 })
+  return callOpenAI(messages, { maxTokens: 2500 })
+}
+
+// Structure resume text into JSON sections for professional PDF generation
+export async function structureResumeForPDF(resumeText) {
+  const messages = [
+    {
+      role: 'system',
+      content: `You are a professional resume formatter. Extract and structure resume content into JSON.
+Return ONLY valid JSON, no markdown, no code blocks, no extra text.
+Schema:
+{
+  "name": "Full Name",
+  "headline": "Job Title / Professional Headline",
+  "contact": { "email": "", "phone": "", "location": "", "linkedin": "", "github": "", "website": "" },
+  "summary": "2-3 sentence professional summary",
+  "experience": [{ "title": "", "company": "", "duration": "", "bullets": ["achievement 1", "achievement 2"] }],
+  "education": [{ "degree": "", "school": "", "year": "" }],
+  "skills": ["skill1", "skill2"],
+  "projects": [{ "name": "", "description": "", "tech": "" }],
+  "certifications": []
+}
+Leave fields empty string or empty array if not found. Always return all keys.`,
+    },
+    {
+      role: 'user',
+      content: `Structure this resume into the JSON format:\n\n${resumeText.substring(0, 4000)}`,
+    },
+  ]
+  const result = await callOpenAI(messages, { temperature: 0.1, maxTokens: 2000 })
+  try {
+    const jsonMatch = result.match(/\{[\s\S]*\}/)
+    return jsonMatch ? JSON.parse(jsonMatch[0]) : null
+  } catch {
+    return null
+  }
+}
+
+// Extract profile info from resume text to auto-fill dashboard profile
+export async function extractProfileFromResume(resumeText) {
+  const messages = [
+    {
+      role: 'system',
+      content: `Extract profile information from a resume. Return ONLY valid JSON, no markdown:
+{
+  "full_name": "",
+  "headline": "e.g. Full-Stack Engineer | React & Node.js",
+  "bio": "2-3 sentence first-person professional summary",
+  "location": "City, Country",
+  "skills": ["skill1", "skill2"],
+  "linkedin": "full URL or empty string",
+  "github": "full URL or empty string",
+  "website": "full URL or empty string"
+}`,
+    },
+    {
+      role: 'user',
+      content: `Extract profile information from this resume:\n\n${resumeText.substring(0, 3000)}`,
+    },
+  ]
+  const result = await callOpenAI(messages, { temperature: 0.1, maxTokens: 800 })
+  try {
+    const jsonMatch = result.match(/\{[\s\S]*\}/)
+    return jsonMatch ? JSON.parse(jsonMatch[0]) : null
+  } catch {
+    return null
+  }
 }
 
 // Generate cover letter
