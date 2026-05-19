@@ -15,42 +15,81 @@ const hexToRgb = (hex) => {
   return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)]
 }
 
-// ─── DENSITY / SCALE ─────────────────────────────────────────────────────────
-// Estimate total content "lines" to determine how aggressively to shrink everything
-function computeDensity(data) {
-  const expCount   = data.experience?.filter(e => e.title)?.length || 0
-  const expBullets = (data.experience || []).reduce((s, e) =>
-    s + Math.min(e.bullets?.filter(Boolean).length || 0, 5), 0)
-  const expLines   = expCount * 2.5 + expBullets   // title+company+bullets
-  const sumLines   = Math.ceil((data.summary?.length || 0) / 95)
-  const eduCount   = data.education?.filter(e => e.degree)?.length || 0
-  const eduLines   = eduCount * 2
-  const skillCount = data.skills?.filter(Boolean).length || 0
-  const skillLines = Math.max(1, Math.ceil(skillCount / 7))
-  const projCount  = data.projects?.filter(p => p.name)?.length || 0
-  const projDescLn = (data.projects || []).filter(p => p.name)
-    .reduce((s, p) => s + Math.ceil((p.description?.length || 0) / 95), 0)
-  const projLines  = projCount * 2 + projDescLn
-  const certCount  = data.certifications?.filter(Boolean).length || 0
-  const sectionGaps = [sumLines, expLines, eduLines, skillLines, projLines]
-    .filter(n => n > 0).length * 2.5
-  return sumLines + expLines + eduLines + skillLines + projLines + certCount + sectionGaps
+// ─── HEIGHT ESTIMATION & ADAPTIVE FILL ───────────────────────────────────────
+// Estimate the rendered main-column height in mm at scale 1.0 — used to compute
+// the optimal scale + section breathing so content fills ~270mm of an A4 page.
+function estimateHeight(data) {
+  let h = 32 // header / name+headline area
+
+  if (data.summary?.trim()) {
+    h += 6 + Math.ceil(data.summary.length / 95) * 4.3 + 4
+  }
+  const exps = (data.experience || []).filter(e => e.title)
+  if (exps.length) {
+    h += 6
+    for (const e of exps) {
+      const bullets = (e.bullets || []).filter(Boolean).slice(0, 5)
+      const bulletH = bullets.reduce((s, b) => s + Math.max(1, Math.ceil(b.length / 95)) * 3.8, 0)
+      h += 4.3 + 4.3 + bulletH + 3
+    }
+  }
+  const edus = (data.education || []).filter(e => e.degree)
+  if (edus.length) {
+    h += 6 + edus.length * 8
+  }
+  const projs = (data.projects || []).filter(p => p.name)
+  if (projs.length) {
+    h += 6
+    for (const p of projs) {
+      const descH = p.description ? Math.ceil(p.description.length / 95) * 3.8 : 0
+      h += 4 + (p.tech ? 4 : 0) + descH + 3
+    }
+  }
+  const certs = (data.certifications || []).filter(Boolean)
+  if (certs.length) h += 6 + certs.length * 4
+  if ((data.skills || []).filter(Boolean).length) {
+    h += 6 + Math.max(1, Math.ceil((data.skills.filter(Boolean).length) / 7)) * 4.3
+  }
+  return h
 }
 
-// Map density → scale factor. Calibrated so ~32 "lines" = scale 1.0
-function getScale(data) {
-  const d = computeDensity(data)
-  if (d < 22) return 1.10   // very sparse — comfortable
-  if (d < 30) return 1.02
-  if (d < 38) return 0.96
-  if (d < 46) return 0.90
-  if (d < 54) return 0.84
-  if (d < 62) return 0.78
-  return 0.74               // very dense — packed
+// Compute optimal scale + per-section bonus to fill an A4 page nicely.
+// - Over-stuffed → shrink scale (min 0.72)
+// - Right-sized → scale 1.0, no bonus
+// - Under-stuffed → moderate scale-up + bonus padding between sections
+function getRenderConfig(data) {
+  const h = estimateHeight(data)
+  const targetH = 268   // mm — usable area before footer
+  const minH    = 220   // anything below this needs breathing room
+  const sectionCount = [
+    data.summary?.trim(),
+    (data.experience || []).filter(e => e.title).length > 0,
+    (data.education || []).filter(e => e.degree).length > 0,
+    (data.skills || []).filter(Boolean).length > 0,
+    (data.projects || []).filter(p => p.name).length > 0,
+    (data.certifications || []).filter(Boolean).length > 0,
+  ].filter(Boolean).length
+
+  // Too dense → shrink
+  if (h > targetH + 10) {
+    return { scale: Math.max(0.72, (targetH / h) * 0.96), bonus: 0 }
+  }
+  // Within ideal band → no adjustment
+  if (h >= minH && h <= targetH + 10) {
+    return { scale: 1.0, bonus: 0 }
+  }
+  // Sparse → moderate font scale-up + breathing bonus between sections
+  const moderateScale = Math.min(1.28, Math.sqrt(targetH / Math.max(h, 80)))
+  const heightAfterScale = h * moderateScale
+  const deficit = Math.max(0, targetH - heightAfterScale)
+  // Distribute deficit across section gaps (skip first); cap per-section bonus
+  const gaps = Math.max(1, sectionCount - 1)
+  const bonus = Math.min(22, deficit / gaps * 0.85)
+  return { scale: moderateScale, bonus }
 }
 
-// Build a scaled sizing object — use these everywhere in templates
-function buildSizes(scale) {
+// Build sizing object using config { scale, bonus }
+function buildSizes(scale, bonus = 0) {
   return {
     name:        Math.round(22 * scale * 10) / 10,
     nameLg:      Math.round(26 * scale * 10) / 10,
@@ -67,10 +106,12 @@ function buildSizes(scale) {
     lineH:       4.3 * scale,
     bulletLH:    3.8 * scale,
     sectionGap:  5.5 * scale,
-    itemGap:     3.2 * scale,
+    itemGap:     3.2 * scale + bonus * 0.25,   // mild item gap boost
     sideLine:    3.6 * scale,
-    headerH:     scale > 1 ? 42 : Math.max(34, 40 * scale),
+    headerH:     scale > 1.05 ? 42 + (scale - 1.05) * 28 : Math.max(34, 40 * scale),
     sidebarW:    Math.max(60, 72 * Math.min(scale, 1.0)),
+    sectionBonus: bonus,   // extra mm added before each section after the first
+    topMargin:   scale > 1.05 ? 18 + (scale - 1.05) * 18 : 16,
   }
 }
 
@@ -78,8 +119,8 @@ function buildSizes(scale) {
 function renderCascade(data, accent) {
   const doc = new jsPDF({ format: 'a4', unit: 'mm' })
   const pageW = 210, pageH = 297
-  const scale = getScale(data)
-  const S = buildSizes(scale)
+  const { scale, bonus } = getRenderConfig(data)
+  const S = buildSizes(scale, bonus)
   const sidebarW = S.sidebarW
   const [ar, ag, ab] = hexToRgb(accent)
 
@@ -166,10 +207,12 @@ function renderCascade(data, accent) {
   // ── MAIN ──
   const mx = sidebarW + 7
   const mw = pageW - mx - 9
-  let my = 18
+  let my = S.topMargin
   const maxY = pageH - 10
+  let _cascadeSecIdx = 0
 
   const mainSection = (title) => {
+    if (_cascadeSecIdx++ > 0) my += S.sectionBonus
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(S.section)
     doc.setTextColor(ar, ag, ab)
@@ -259,8 +302,8 @@ function renderCascade(data, accent) {
 function renderCrisp(data, accent) {
   const doc = new jsPDF({ format: 'a4', unit: 'mm' })
   const pageW = 210, pageH = 297
-  const scale = getScale(data)
-  const S = buildSizes(scale)
+  const { scale, bonus } = getRenderConfig(data)
+  const S = buildSizes(scale, bonus)
   const sidebarW = Math.max(58, 65 * Math.min(scale, 1))
   const sidebarX = pageW - sidebarW
   const [ar, ag, ab] = hexToRgb(accent)
@@ -273,8 +316,9 @@ function renderCrisp(data, accent) {
   // ── MAIN ──
   const mx = 14
   const mw = sidebarX - mx - 6
-  let my = 20
+  let my = S.topMargin
   const maxY = pageH - 10
+  let _crispSecIdx = 0
 
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(S.nameLg)
@@ -288,6 +332,7 @@ function renderCrisp(data, accent) {
   my += S.lineH * 1.6
 
   const mainSection = (title) => {
+    if (_crispSecIdx++ > 0) my += S.sectionBonus
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(S.section)
     doc.setTextColor(ar, ag, ab)
@@ -444,8 +489,8 @@ function renderCrisp(data, accent) {
 function renderConcept(data, accent) {
   const doc = new jsPDF({ format: 'a4', unit: 'mm' })
   const pageW = 210, pageH = 297
-  const scale = getScale(data)
-  const S = buildSizes(scale)
+  const { scale, bonus } = getRenderConfig(data)
+  const S = buildSizes(scale, bonus)
   const ml = 16, mr = 16
   const cW = pageW - ml - mr
   const [ar, ag, ab] = hexToRgb(accent)
@@ -473,8 +518,10 @@ function renderConcept(data, accent) {
   doc.text(cParts.join('  ·  ').substring(0, 140), ml, bandH * 0.83)
 
   let y = bandH + 8
+  let _conceptSecIdx = 0
 
   const section = (title) => {
+    if (_conceptSecIdx++ > 0) y += S.sectionBonus
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(S.section)
     doc.setTextColor(ar, ag, ab)
@@ -595,14 +642,14 @@ function renderConcept(data, accent) {
 function renderDiamond(data, accent) {
   const doc = new jsPDF({ format: 'a4', unit: 'mm' })
   const pageW = 210, pageH = 297
-  const scale = getScale(data)
-  const S = buildSizes(scale)
+  const { scale, bonus } = getRenderConfig(data)
+  const S = buildSizes(scale, bonus)
   const ml = 20, mr = 20
   const cW = pageW - ml - mr
   const [ar, ag, ab] = hexToRgb(accent)
   const maxY = pageH - 10
 
-  let y = 22
+  let y = Math.max(22, S.topMargin + 4)
   doc.setFont('times', 'bold')
   doc.setFontSize(S.nameLg * 1.05)
   doc.setTextColor(30, 30, 40)
@@ -631,8 +678,10 @@ function renderDiamond(data, accent) {
   doc.setTextColor(80, 80, 90)
   doc.text(cParts.join('  ·  ').substring(0, 130), pageW / 2, y, { align: 'center' })
   y += S.lineH * 1.6
+  let _diamondSecIdx = 0
 
   const section = (title) => {
+    if (_diamondSecIdx++ > 0) y += S.sectionBonus
     doc.setFont('times', 'bold')
     doc.setFontSize(S.section)
     doc.setTextColor(ar, ag, ab)
@@ -728,8 +777,8 @@ function renderDiamond(data, accent) {
 function renderIconic(data, accent) {
   const doc = new jsPDF({ format: 'a4', unit: 'mm' })
   const pageW = 210, pageH = 297
-  const scale = getScale(data)
-  const S = buildSizes(scale)
+  const { scale, bonus } = getRenderConfig(data)
+  const S = buildSizes(scale, bonus)
   const sidebarW = Math.max(70, 80 * Math.min(scale, 1))
   const [ar, ag, ab] = hexToRgb(accent)
   const maxY = pageH - 10
@@ -825,9 +874,11 @@ function renderIconic(data, accent) {
   // ── MAIN ──
   const mx = sidebarW + 9
   const mw = pageW - mx - 12
-  let my = 20
+  let my = S.topMargin
+  let _iconicSecIdx = 0
 
   const mainSec = (title) => {
+    if (_iconicSecIdx++ > 0) my += S.sectionBonus
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(S.section * 1.1)
     doc.setTextColor(ar, ag, ab)
