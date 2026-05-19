@@ -1,7 +1,7 @@
 // Resume page — upload, analyze, improve, download
 import { useState, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { Upload, FileText, Download, Sparkles, AlertCircle, CheckCircle, BarChart3, RefreshCw, Palette } from 'lucide-react'
+import { Upload, FileText, Download, Sparkles, AlertCircle, CheckCircle, BarChart3, RefreshCw, Palette, Loader2 } from 'lucide-react'
 import DashboardLayout from '@/layouts/DashboardLayout'
 import Card from '@/components/ui/Card'
 import Button from '@/components/ui/Button'
@@ -11,6 +11,23 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import toast from 'react-hot-toast'
 import jsPDF from 'jspdf'
+import * as pdfjs from 'pdfjs-dist'
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+
+// Extract plain text from a PDF File object
+async function extractTextFromPDF(file) {
+  const arrayBuffer = await file.arrayBuffer()
+  const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise
+  const pageTexts = []
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i)
+    const content = await page.getTextContent()
+    const pageText = content.items.map(item => item.str).join(' ')
+    pageTexts.push(pageText)
+  }
+  return pageTexts.join('\n\n')
+}
 
 // Resume PDF themes
 const RESUME_THEMES = [
@@ -80,18 +97,41 @@ export default function ResumePage() {
   const [improving, setImproving] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [resumeTheme, setResumeTheme] = useState('classic')
+  const [parsing, setParsing] = useState(false)
   const fileRef = useRef(null)
 
   async function handleFile(file) {
     if (!file) return
-    if (file.type !== 'application/pdf' && !file.type.includes('text')) {
-      return toast.error('Please upload a PDF or text file')
+    const isPDF = file.type === 'application/pdf' || file.name.endsWith('.pdf')
+    const isTXT = file.type.includes('text') || file.name.endsWith('.txt') || file.name.endsWith('.doc')
+
+    if (!isPDF && !isTXT) {
+      return toast.error('Please upload a PDF or TXT file')
     }
 
-    const reader = new FileReader()
-    reader.onload = (e) => setResumeText(e.target.result)
-    reader.readAsText(file)
-    toast.success('Resume loaded! Click "Analyze" to get your ATS score.')
+    if (isPDF) {
+      setParsing(true)
+      try {
+        const text = await extractTextFromPDF(file)
+        if (!text.trim()) {
+          toast.error('Could not extract text from this PDF. Try a non-scanned PDF or paste your resume text instead.')
+        } else {
+          setResumeText(text.trim())
+          toast.success(`PDF parsed! ${text.length} characters extracted. Click "Analyze" to get your ATS score.`)
+        }
+      } catch (err) {
+        toast.error('Failed to read PDF. Please paste your resume text instead.')
+        console.error(err)
+      }
+      setParsing(false)
+    } else {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        setResumeText(e.target.result)
+        toast.success('Resume loaded! Click "Analyze" to get your ATS score.')
+      }
+      reader.readAsText(file)
+    }
   }
 
   async function handleAnalyze() {
@@ -270,9 +310,19 @@ export default function ResumePage() {
                   : 'border-white/10 hover:border-violet-500/50 hover:bg-white/[0.02]'
               }`}
             >
-              <FileText size={40} className="text-white/20 mx-auto mb-3" />
-              <p className="text-white/60 font-medium mb-1">Drop your resume here</p>
-              <p className="text-white/30 text-sm">PDF or TXT format</p>
+              {parsing ? (
+                <>
+                  <Loader2 size={40} className="text-violet-400 mx-auto mb-3 animate-spin" />
+                  <p className="text-violet-300 font-medium mb-1">Extracting text from PDF…</p>
+                  <p className="text-white/30 text-sm">This takes a moment</p>
+                </>
+              ) : (
+                <>
+                  <FileText size={40} className="text-white/20 mx-auto mb-3" />
+                  <p className="text-white/60 font-medium mb-1">Drop your resume here</p>
+                  <p className="text-white/30 text-sm">PDF or TXT • text is automatically extracted</p>
+                </>
+              )}
               <input
                 ref={fileRef}
                 type="file"
