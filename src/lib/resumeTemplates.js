@@ -53,43 +53,60 @@ function estimateHeight(data) {
   return h
 }
 
-// Compute optimal scale + per-section bonus to fill an A4 page nicely.
-// - Over-stuffed → shrink scale (min 0.72)
-// - Right-sized → scale 1.0, no bonus
-// - Under-stuffed → moderate scale-up + bonus padding between sections
-function getRenderConfig(data) {
+// Compute optimal scale + bonuses to fill an A4 page nicely.
+// Most sidebar templates only fit 2-3 sections in the main column, so we
+// distribute the deficit across MAIN-COLUMN gaps + inter-experience gaps.
+function getRenderConfig(data, templateId) {
   const h = estimateHeight(data)
-  const targetH = 268   // mm — usable area before footer
-  const minH    = 220   // anything below this needs breathing room
-  const sectionCount = [
+  const targetH = 270
+  const minH    = 225
+
+  // Count "main column" sections that actually contribute to vertical fill
+  // For sidebar templates, education/skills live in the sidebar.
+  const hasSidebar = templateId === 'cascade' || templateId === 'crisp' || templateId === 'iconic'
+  const mainSections = [
     data.summary?.trim(),
     (data.experience || []).filter(e => e.title).length > 0,
-    (data.education || []).filter(e => e.degree).length > 0,
-    (data.skills || []).filter(Boolean).length > 0,
+    !hasSidebar && (data.education || []).filter(e => e.degree).length > 0,
+    !hasSidebar && (data.skills || []).filter(Boolean).length > 0,
     (data.projects || []).filter(p => p.name).length > 0,
-    (data.certifications || []).filter(Boolean).length > 0,
+    !hasSidebar && (data.certifications || []).filter(Boolean).length > 0,
   ].filter(Boolean).length
+
+  const expCount = (data.experience || []).filter(e => e.title).length
+  const expGaps  = Math.max(0, expCount - 1)
 
   // Too dense → shrink
   if (h > targetH + 10) {
-    return { scale: Math.max(0.72, (targetH / h) * 0.96), bonus: 0 }
+    return { scale: Math.max(0.72, (targetH / h) * 0.96), bonus: 0, itemBonus: 0, topPad: 0 }
   }
-  // Within ideal band → no adjustment
+  // Right-sized → minimal adjustment
   if (h >= minH && h <= targetH + 10) {
-    return { scale: 1.0, bonus: 0 }
+    return { scale: 1.0, bonus: 0, itemBonus: 0, topPad: 0 }
   }
-  // Sparse → moderate font scale-up + breathing bonus between sections
-  const moderateScale = Math.min(1.28, Math.sqrt(targetH / Math.max(h, 80)))
+
+  // Sparse → moderate scale-up plus distributed breathing room.
+  const moderateScale = Math.min(1.32, Math.sqrt(targetH / Math.max(h, 80)))
   const heightAfterScale = h * moderateScale
   const deficit = Math.max(0, targetH - heightAfterScale)
-  // Distribute deficit across section gaps (skip first); cap per-section bonus
-  const gaps = Math.max(1, sectionCount - 1)
-  const bonus = Math.min(22, deficit / gaps * 0.85)
-  return { scale: moderateScale, bonus }
+
+  // Distribution weights: sections get 1.0, exp item gaps get 0.5, top gets 0.3
+  const sectionGaps = Math.max(1, mainSections - 1)
+  const totalUnits  = sectionGaps + expGaps * 0.5 + 0.3
+  const perUnit     = deficit / totalUnits
+  const bonus       = Math.min(40, perUnit)
+  const itemBonus   = Math.min(20, perUnit * 0.5)
+  const topPad      = Math.min(10, perUnit * 0.3)
+
+  return { scale: moderateScale, bonus, itemBonus, topPad }
 }
 
-// Build sizing object using config { scale, bonus }
-function buildSizes(scale, bonus = 0) {
+// Build sizing object using config { scale, bonus, itemBonus, topPad }
+function buildSizes(cfg) {
+  const { scale, bonus = 0, itemBonus = 0, topPad = 0 } = cfg
+  // When scale > 1, also expand line heights moderately for natural breathing room
+  const lineMult = scale > 1.05 ? scale * 1.08 : scale
+  const bulletMult = scale > 1.05 ? scale * 1.12 : scale
   return {
     name:        Math.round(22 * scale * 10) / 10,
     nameLg:      Math.round(26 * scale * 10) / 10,
@@ -103,15 +120,15 @@ function buildSizes(scale, bonus = 0) {
     small:       Math.round(8 * scale * 10) / 10,
     tiny:        Math.round(7.3 * scale * 10) / 10,
     micro:       Math.round(6.6 * scale * 10) / 10,
-    lineH:       4.3 * scale,
-    bulletLH:    3.8 * scale,
+    lineH:       4.3 * lineMult,
+    bulletLH:    3.8 * bulletMult,
     sectionGap:  5.5 * scale,
-    itemGap:     3.2 * scale + bonus * 0.25,   // mild item gap boost
+    itemGap:     3.2 * scale + itemBonus,
     sideLine:    3.6 * scale,
-    headerH:     scale > 1.05 ? 42 + (scale - 1.05) * 28 : Math.max(34, 40 * scale),
+    headerH:     scale > 1.05 ? 42 + (scale - 1.05) * 32 : Math.max(34, 40 * scale),
     sidebarW:    Math.max(60, 72 * Math.min(scale, 1.0)),
-    sectionBonus: bonus,   // extra mm added before each section after the first
-    topMargin:   scale > 1.05 ? 18 + (scale - 1.05) * 18 : 16,
+    sectionBonus: bonus,
+    topMargin:   16 + topPad + (scale > 1.05 ? (scale - 1.05) * 22 : 0),
   }
 }
 
@@ -119,8 +136,8 @@ function buildSizes(scale, bonus = 0) {
 function renderCascade(data, accent) {
   const doc = new jsPDF({ format: 'a4', unit: 'mm' })
   const pageW = 210, pageH = 297
-  const { scale, bonus } = getRenderConfig(data)
-  const S = buildSizes(scale, bonus)
+  const cfg = getRenderConfig(data, 'cascade')
+  const S = buildSizes(cfg)
   const sidebarW = S.sidebarW
   const [ar, ag, ab] = hexToRgb(accent)
 
@@ -263,7 +280,7 @@ function renderCascade(data, accent) {
         doc.text(bl, mx + 1, my)
         my += bl.length * S.bulletLH
       }
-      my += S.itemGap * 0.7
+      my += S.itemGap
     }
   }
 
@@ -302,8 +319,9 @@ function renderCascade(data, accent) {
 function renderCrisp(data, accent) {
   const doc = new jsPDF({ format: 'a4', unit: 'mm' })
   const pageW = 210, pageH = 297
-  const { scale, bonus } = getRenderConfig(data)
-  const S = buildSizes(scale, bonus)
+  const cfg = getRenderConfig(data, 'crisp')
+  const S = buildSizes(cfg)
+  const { scale } = cfg
   const sidebarW = Math.max(58, 65 * Math.min(scale, 1))
   const sidebarX = pageW - sidebarW
   const [ar, ag, ab] = hexToRgb(accent)
@@ -383,7 +401,7 @@ function renderCrisp(data, accent) {
         doc.text(bl, mx + 1, my)
         my += bl.length * S.bulletLH
       }
-      my += S.itemGap * 0.7
+      my += S.itemGap
     }
   }
 
@@ -489,8 +507,8 @@ function renderCrisp(data, accent) {
 function renderConcept(data, accent) {
   const doc = new jsPDF({ format: 'a4', unit: 'mm' })
   const pageW = 210, pageH = 297
-  const { scale, bonus } = getRenderConfig(data)
-  const S = buildSizes(scale, bonus)
+  const cfg = getRenderConfig(data, 'concept')
+  const S = buildSizes(cfg)
   const ml = 16, mr = 16
   const cW = pageW - ml - mr
   const [ar, ag, ab] = hexToRgb(accent)
@@ -566,7 +584,7 @@ function renderConcept(data, accent) {
         doc.text(bl, ml + 1, y)
         y += bl.length * S.bulletLH
       }
-      y += S.itemGap * 0.7
+      y += S.itemGap
     }
   }
 
@@ -642,8 +660,8 @@ function renderConcept(data, accent) {
 function renderDiamond(data, accent) {
   const doc = new jsPDF({ format: 'a4', unit: 'mm' })
   const pageW = 210, pageH = 297
-  const { scale, bonus } = getRenderConfig(data)
-  const S = buildSizes(scale, bonus)
+  const cfg = getRenderConfig(data, 'diamond')
+  const S = buildSizes(cfg)
   const ml = 20, mr = 20
   const cW = pageW - ml - mr
   const [ar, ag, ab] = hexToRgb(accent)
@@ -733,7 +751,7 @@ function renderDiamond(data, accent) {
         doc.text(bl, ml + 1, y)
         y += bl.length * S.bulletLH
       }
-      y += S.itemGap * 0.7
+      y += S.itemGap
     }
   }
 
@@ -777,8 +795,9 @@ function renderDiamond(data, accent) {
 function renderIconic(data, accent) {
   const doc = new jsPDF({ format: 'a4', unit: 'mm' })
   const pageW = 210, pageH = 297
-  const { scale, bonus } = getRenderConfig(data)
-  const S = buildSizes(scale, bonus)
+  const cfg = getRenderConfig(data, 'iconic')
+  const S = buildSizes(cfg)
+  const { scale } = cfg
   const sidebarW = Math.max(70, 80 * Math.min(scale, 1))
   const [ar, ag, ab] = hexToRgb(accent)
   const maxY = pageH - 10
@@ -929,7 +948,7 @@ function renderIconic(data, accent) {
         doc.text(bl, mx + 1, my)
         my += bl.length * S.bulletLH
       }
-      my += S.itemGap * 0.7
+      my += S.itemGap
     }
   }
 
