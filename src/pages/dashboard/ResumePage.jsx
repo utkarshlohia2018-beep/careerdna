@@ -71,34 +71,47 @@ export default function ResumePage() {
   const [dragOver, setDragOver] = useState(false)
   const [extractedProfile, setExtractedProfile] = useState(null)
   const [expandedSection, setExpandedSection] = useState('basics')
-  const [previewUrl, setPreviewUrl] = useState(null)
+  const [hasPreview, setHasPreview] = useState(false)
 
   const fileRef = useRef(null)
+  const canvasRef = useRef(null)
+  const containerRef = useRef(null)
 
-  // Debounced PDF preview generation — renders the EXACT same PDF that downloads
+  // Debounced PDF preview — renders actual PDF to canvas via pdfjs (pixel-perfect, edge-to-edge)
   useEffect(() => {
     if (!resumeData.name && !resumeData.summary && !resumeData.experience?.[0]?.title) {
-      setPreviewUrl(null)
+      setHasPreview(false)
       return
     }
-    const t = setTimeout(() => {
+    let cancelled = false
+    const t = setTimeout(async () => {
       try {
         const finalData = {
           ...resumeData,
           skills: skillsInput.split(',').map(s => s.trim()).filter(Boolean),
         }
         const doc = renderResumeTemplate(templateId, finalData)
-        const blob = doc.output('blob')
-        const url = URL.createObjectURL(blob)
-        setPreviewUrl(prev => {
-          if (prev) URL.revokeObjectURL(prev)
-          return url
-        })
+        const arrayBuffer = doc.output('arraybuffer')
+        if (cancelled) return
+        const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise
+        const page = await pdf.getPage(1)
+        const canvas = canvasRef.current
+        if (!canvas || cancelled) return
+        const containerW = containerRef.current?.clientWidth || 400
+        const baseViewport = page.getViewport({ scale: 1 })
+        const renderScale = (containerW / baseViewport.width) * Math.max(window.devicePixelRatio || 1, 1.5)
+        const viewport = page.getViewport({ scale: renderScale })
+        canvas.width = viewport.width
+        canvas.height = viewport.height
+        const ctx = canvas.getContext('2d')
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        await page.render({ canvasContext: ctx, viewport }).promise
+        if (!cancelled) setHasPreview(true)
       } catch (e) {
         console.error('Preview render failed', e)
       }
     }, 350)
-    return () => clearTimeout(t)
+    return () => { cancelled = true; clearTimeout(t) }
   }, [resumeData, templateId, skillsInput])
 
   // Pre-fill builder with user's profile data on first load
@@ -696,15 +709,17 @@ export default function ResumePage() {
                 {RESUME_TEMPLATES.find(t => t.id === templateId)?.label}
               </span>
             </h2>
-            <div className="bg-white rounded-xl overflow-hidden aspect-[210/297] shadow-2xl relative">
-              {previewUrl ? (
-                <iframe
-                  src={previewUrl + '#toolbar=0&navpanes=0&scrollbar=0&view=FitH'}
-                  title="Resume preview"
-                  className="w-full h-full border-0"
-                />
-              ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center text-gray-400">
+            <div
+              ref={containerRef}
+              className="bg-white rounded-xl overflow-hidden aspect-[210/297] shadow-2xl relative"
+            >
+              <canvas
+                ref={canvasRef}
+                className="block w-full h-full"
+                style={{ display: hasPreview ? 'block' : 'none' }}
+              />
+              {!hasPreview && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
                   <FileText size={42} className="mb-2 opacity-30" />
                   <p className="text-sm">Start typing to see your resume</p>
                 </div>
