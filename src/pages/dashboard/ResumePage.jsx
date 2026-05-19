@@ -71,8 +71,35 @@ export default function ResumePage() {
   const [dragOver, setDragOver] = useState(false)
   const [extractedProfile, setExtractedProfile] = useState(null)
   const [expandedSection, setExpandedSection] = useState('basics')
+  const [previewUrl, setPreviewUrl] = useState(null)
 
   const fileRef = useRef(null)
+
+  // Debounced PDF preview generation — renders the EXACT same PDF that downloads
+  useEffect(() => {
+    if (!resumeData.name && !resumeData.summary && !resumeData.experience?.[0]?.title) {
+      setPreviewUrl(null)
+      return
+    }
+    const t = setTimeout(() => {
+      try {
+        const finalData = {
+          ...resumeData,
+          skills: skillsInput.split(',').map(s => s.trim()).filter(Boolean),
+        }
+        const doc = renderResumeTemplate(templateId, finalData)
+        const blob = doc.output('blob')
+        const url = URL.createObjectURL(blob)
+        setPreviewUrl(prev => {
+          if (prev) URL.revokeObjectURL(prev)
+          return url
+        })
+      } catch (e) {
+        console.error('Preview render failed', e)
+      }
+    }, 350)
+    return () => clearTimeout(t)
+  }, [resumeData, templateId, skillsInput])
 
   // Pre-fill builder with user's profile data on first load
   useEffect(() => {
@@ -669,8 +696,19 @@ export default function ResumePage() {
                 {RESUME_TEMPLATES.find(t => t.id === templateId)?.label}
               </span>
             </h2>
-            <div className="bg-white rounded-xl overflow-hidden aspect-[210/297] shadow-2xl">
-              <LivePreview data={resumeData} templateId={templateId} skillsText={skillsInput} />
+            <div className="bg-white rounded-xl overflow-hidden aspect-[210/297] shadow-2xl relative">
+              {previewUrl ? (
+                <iframe
+                  src={previewUrl + '#toolbar=0&navpanes=0&scrollbar=0&view=FitH'}
+                  title="Resume preview"
+                  className="w-full h-full border-0"
+                />
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center text-gray-400">
+                  <FileText size={42} className="mb-2 opacity-30" />
+                  <p className="text-sm">Start typing to see your resume</p>
+                </div>
+              )}
             </div>
           </Card>
 
@@ -837,281 +875,4 @@ function TemplatePreview({ swatch, accent, active }) {
     )
   }
   return null
-}
-
-// ─── LIVE HTML PREVIEW (matches PDF templates roughly) ───────────────────────
-function LivePreview({ data, templateId, skillsText }) {
-  const template = RESUME_TEMPLATES.find(t => t.id === templateId) || RESUME_TEMPLATES[0]
-  const accent = template.accent
-  const skills = skillsText.split(',').map(s => s.trim()).filter(Boolean)
-  const c = data.contact || {}
-  const contactList = [c.email, c.phone, c.location,
-    c.linkedin?.replace(/https?:\/\//, ''),
-    c.github?.replace(/https?:\/\//, ''),
-    c.website?.replace(/https?:\/\//, '')].filter(Boolean)
-
-  if (templateId === 'cascade') {
-    return (
-      <div className="w-full h-full flex text-[6px] leading-tight">
-        <div className="w-[35%] p-2 text-white" style={{ background: accent }}>
-          <div className="font-bold text-[10px] leading-tight">{data.name || 'Your Name'}</div>
-          <div className="text-[7px] opacity-80 mt-1">{data.headline}</div>
-          <div className="mt-3">
-            <div className="font-bold uppercase text-[7px] border-b border-white/40 pb-0.5 mb-1">Contact</div>
-            {contactList.map((v, i) => <div key={i} className="text-[6px] opacity-90 mb-0.5 break-all">{v}</div>)}
-          </div>
-          {skills.length > 0 && (
-            <div className="mt-3">
-              <div className="font-bold uppercase text-[7px] border-b border-white/40 pb-0.5 mb-1">Skills</div>
-              {skills.slice(0, 10).map((s, i) => <div key={i} className="text-[6px] opacity-90">• {s}</div>)}
-            </div>
-          )}
-          {data.education?.length > 0 && (
-            <div className="mt-3">
-              <div className="font-bold uppercase text-[7px] border-b border-white/40 pb-0.5 mb-1">Education</div>
-              {data.education.map((e, i) => (
-                <div key={i} className="mb-1.5">
-                  <div className="text-[6.5px] font-bold">{e.degree}</div>
-                  <div className="text-[6px] opacity-80">{[e.school, e.year].filter(Boolean).join(' · ')}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="flex-1 p-2 text-gray-800">
-          {data.summary && (
-            <>
-              <div className="font-bold uppercase text-[8px] border-b" style={{ color: accent, borderColor: accent }}>Profile</div>
-              <div className="text-[6.5px] mt-1 mb-2">{data.summary}</div>
-            </>
-          )}
-          {data.experience?.length > 0 && data.experience[0].title && (
-            <>
-              <div className="font-bold uppercase text-[8px] border-b" style={{ color: accent, borderColor: accent }}>Experience</div>
-              {data.experience.filter(e => e.title).map((e, i) => (
-                <div key={i} className="mt-1.5">
-                  <div className="flex justify-between">
-                    <span className="font-bold text-[7px]">{e.title}</span>
-                    <span className="text-[6px] text-gray-500">{e.duration}</span>
-                  </div>
-                  <div className="italic text-[6.5px]" style={{ color: accent }}>{e.company}</div>
-                  {e.bullets?.filter(Boolean).slice(0, 3).map((b, bi) => (
-                    <div key={bi} className="text-[6px] mt-0.5">• {b}</div>
-                  ))}
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  if (templateId === 'crisp') {
-    return (
-      <div className="w-full h-full flex text-[6px] leading-tight bg-white">
-        <div className="flex-1 p-2 text-gray-800">
-          <div className="font-bold text-[12px]" style={{ color: accent }}>{data.name || 'Your Name'}</div>
-          <div className="text-[7px] text-gray-600 mt-1">{data.headline}</div>
-          {data.summary && (
-            <>
-              <div className="font-bold uppercase text-[7.5px] mt-2 mb-1" style={{ color: accent }}>Profile</div>
-              <div className="text-[6.5px]">{data.summary}</div>
-            </>
-          )}
-          {data.experience?.length > 0 && data.experience[0].title && (
-            <>
-              <div className="font-bold uppercase text-[7.5px] mt-2 mb-1" style={{ color: accent }}>Experience</div>
-              {data.experience.filter(e => e.title).map((e, i) => (
-                <div key={i} className="mt-1.5">
-                  <div className="font-bold text-[7px]">{e.title}</div>
-                  <div className="text-[6.5px]" style={{ color: accent }}>{e.company} · {e.duration}</div>
-                  {e.bullets?.filter(Boolean).slice(0, 3).map((b, bi) => (
-                    <div key={bi} className="text-[6px] mt-0.5">• {b}</div>
-                  ))}
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-        <div className="w-[30%] p-2 bg-gray-100 border-l-2" style={{ borderColor: accent }}>
-          <div className="font-bold uppercase text-[7px] mb-1" style={{ color: accent }}>Contact</div>
-          {contactList.map((v, i) => <div key={i} className="text-[6px] text-gray-700 break-all mb-0.5">{v}</div>)}
-          {skills.length > 0 && (
-            <>
-              <div className="font-bold uppercase text-[7px] mt-2 mb-1" style={{ color: accent }}>Skills</div>
-              {skills.slice(0, 10).map((s, i) => <div key={i} className="text-[6px] text-gray-700">• {s}</div>)}
-            </>
-          )}
-          {data.education?.length > 0 && data.education[0].degree && (
-            <>
-              <div className="font-bold uppercase text-[7px] mt-2 mb-1" style={{ color: accent }}>Education</div>
-              {data.education.filter(e => e.degree).map((e, i) => (
-                <div key={i} className="mb-1">
-                  <div className="font-bold text-[6.5px]">{e.degree}</div>
-                  <div className="text-[6px] text-gray-600">{[e.school, e.year].filter(Boolean).join(' · ')}</div>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  if (templateId === 'concept') {
-    return (
-      <div className="w-full h-full text-[6px] leading-tight bg-white">
-        <div className="p-2 text-white" style={{ background: accent }}>
-          <div className="font-bold text-[12px]">{data.name || 'Your Name'}</div>
-          <div className="text-[7px] opacity-90">{data.headline}</div>
-          <div className="text-[5.5px] opacity-80 mt-1">{contactList.join(' · ')}</div>
-        </div>
-        <div className="p-2 text-gray-800">
-          {data.summary && (
-            <>
-              <div className="font-bold uppercase text-[7.5px] mb-1" style={{ color: accent }}>Profile</div>
-              <div className="text-[6.5px] mb-2">{data.summary}</div>
-            </>
-          )}
-          {data.experience?.length > 0 && data.experience[0].title && (
-            <>
-              <div className="font-bold uppercase text-[7.5px] mb-1" style={{ color: accent }}>Experience</div>
-              {data.experience.filter(e => e.title).map((e, i) => (
-                <div key={i} className="mt-1.5">
-                  <div className="flex justify-between font-bold text-[7px]">
-                    <span>{e.title} · {e.company}</span>
-                    <span className="text-gray-500">{e.duration}</span>
-                  </div>
-                  {e.bullets?.filter(Boolean).slice(0, 3).map((b, bi) => (
-                    <div key={bi} className="text-[6px] mt-0.5">• {b}</div>
-                  ))}
-                </div>
-              ))}
-            </>
-          )}
-          {(skills.length > 0 || data.education?.length > 0) && (
-            <div className="grid grid-cols-2 gap-2 mt-2">
-              {skills.length > 0 && (
-                <div>
-                  <div className="font-bold text-[6.5px] text-gray-700">Skills</div>
-                  <div className="text-[6px]">{skills.join(' · ')}</div>
-                </div>
-              )}
-              {data.education?.length > 0 && data.education[0].degree && (
-                <div>
-                  <div className="font-bold text-[6.5px] text-gray-700">Education</div>
-                  {data.education.filter(e => e.degree).map((e, i) => (
-                    <div key={i} className="text-[6px]">
-                      <div className="font-bold">{e.degree}</div>
-                      <div>{[e.school, e.year].filter(Boolean).join(' · ')}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  if (templateId === 'diamond') {
-    return (
-      <div className="w-full h-full text-[6px] leading-tight bg-white p-3 font-serif">
-        <div className="text-center">
-          <div className="font-bold text-[13px] text-gray-900">{data.name || 'Your Name'}</div>
-          <div className="italic text-[8px] mt-0.5" style={{ color: accent }}>{data.headline}</div>
-          <div className="border-t-2 mx-6 mt-1.5" style={{ borderColor: accent }} />
-          <div className="border-t mx-6 mt-0.5" style={{ borderColor: accent }} />
-          <div className="text-[5.5px] mt-1 text-gray-600">{contactList.join(' · ')}</div>
-        </div>
-        {data.summary && (
-          <div className="mt-3">
-            <div className="font-bold uppercase text-[7.5px] text-center" style={{ color: accent }}>Profile</div>
-            <div className="text-[6.5px] mt-1 text-gray-800">{data.summary}</div>
-          </div>
-        )}
-        {data.experience?.length > 0 && data.experience[0].title && (
-          <div className="mt-2">
-            <div className="font-bold uppercase text-[7.5px] text-center" style={{ color: accent }}>Experience</div>
-            {data.experience.filter(e => e.title).map((e, i) => (
-              <div key={i} className="mt-1.5">
-                <div className="flex justify-between">
-                  <span className="font-bold text-[7px]">{e.title}</span>
-                  <span className="italic text-[6px] text-gray-500">{e.duration}</span>
-                </div>
-                <div className="italic text-[6.5px]" style={{ color: accent }}>{e.company}</div>
-                {e.bullets?.filter(Boolean).slice(0, 3).map((b, bi) => (
-                  <div key={bi} className="text-[6px] mt-0.5">• {b}</div>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
-        {skills.length > 0 && (
-          <div className="mt-2">
-            <div className="font-bold uppercase text-[7.5px] text-center" style={{ color: accent }}>Skills</div>
-            <div className="text-[6.5px] mt-1 text-center text-gray-800">{skills.join(' · ')}</div>
-          </div>
-        )}
-      </div>
-    )
-  }
-
-  if (templateId === 'iconic') {
-    const initials = (data.name || 'YN').split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase()
-    return (
-      <div className="w-full h-full flex text-[6px] leading-tight bg-white">
-        <div className="w-[38%] p-2 text-white text-center" style={{ background: accent }}>
-          <div className="w-8 h-8 mx-auto rounded-full bg-white flex items-center justify-center mb-2">
-            <span className="font-bold text-[10px]" style={{ color: accent }}>{initials}</span>
-          </div>
-          <div className="font-bold text-[9px]">{data.name || 'Your Name'}</div>
-          <div className="text-[6.5px] opacity-90 mt-0.5">{data.headline}</div>
-          <div className="mt-3">
-            <div className="font-bold uppercase text-[7px] mb-1">Contact</div>
-            <div className="w-6 h-px bg-white mx-auto mb-1" />
-            {contactList.map((v, i) => <div key={i} className="text-[5.5px] opacity-90 break-all mb-0.5">{v}</div>)}
-          </div>
-          {skills.length > 0 && (
-            <div className="mt-3">
-              <div className="font-bold uppercase text-[7px] mb-1">Skills</div>
-              <div className="w-6 h-px bg-white mx-auto mb-1" />
-              {skills.slice(0, 8).map((s, i) => <div key={i} className="text-[6px] opacity-90">{s}</div>)}
-            </div>
-          )}
-        </div>
-        <div className="flex-1 p-2 text-gray-800">
-          {data.summary && (
-            <>
-              <div className="font-bold uppercase text-[8px]" style={{ color: accent }}>Profile</div>
-              <div className="w-5 h-0.5 mb-1" style={{ background: accent }} />
-              <div className="text-[6.5px] mb-2">{data.summary}</div>
-            </>
-          )}
-          {data.experience?.length > 0 && data.experience[0].title && (
-            <>
-              <div className="font-bold uppercase text-[8px]" style={{ color: accent }}>Experience</div>
-              <div className="w-5 h-0.5 mb-1" style={{ background: accent }} />
-              {data.experience.filter(e => e.title).map((e, i) => (
-                <div key={i} className="mt-1.5">
-                  <div className="font-bold text-[7px]">{e.title}</div>
-                  <div className="flex justify-between text-[6.5px]" style={{ color: accent }}>
-                    <span className="font-bold">{e.company}</span>
-                    <span className="text-gray-500 font-normal">{e.duration}</span>
-                  </div>
-                  {e.bullets?.filter(Boolean).slice(0, 3).map((b, bi) => (
-                    <div key={bi} className="text-[6px] mt-0.5">• {b}</div>
-                  ))}
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  return <div className="p-4 text-gray-400 text-xs">Select a template</div>
 }
