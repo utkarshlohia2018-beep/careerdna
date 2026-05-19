@@ -159,6 +159,34 @@ export async function extractProfileFromResume(resumeText) {
   }
 }
 
+// Improve a structured resume JSON in-place — enhances bullets, summary, headline
+export async function improveStructuredResume(data) {
+  const messages = [
+    {
+      role: 'system',
+      content: `You are an expert resume writer. Take a structured resume JSON and improve it:
+- Rewrite the summary to be punchy (2-3 sentences) leading with strongest qualification
+- Rewrite EVERY experience bullet to start with strong action verb + quantified result + context
+- Polish project descriptions to be impact-focused (1-2 sentences each)
+- Keep headline concise (under 60 chars)
+- Don't add fake metrics — only enhance what's there
+- Keep skills, education, contact, dates EXACTLY as given
+Return ONLY valid JSON matching the input schema. No markdown, no commentary.`,
+    },
+    {
+      role: 'user',
+      content: `Improve this structured resume:\n\n${JSON.stringify(data, null, 2)}`,
+    },
+  ]
+  const result = await callOpenAI(messages, { temperature: 0.4, maxTokens: 2500 })
+  try {
+    const jsonMatch = result.match(/\{[\s\S]*\}/)
+    return jsonMatch ? JSON.parse(jsonMatch[0]) : data
+  } catch {
+    return data
+  }
+}
+
 // Generate cover letter
 export async function generateCoverLetter(data) {
   const { name, jobTitle, company, skills, experience } = data
