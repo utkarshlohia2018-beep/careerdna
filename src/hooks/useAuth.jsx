@@ -1,56 +1,47 @@
 // Authentication hook - manages user session globally
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 
 const AuthContext = createContext({})
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null)
+  const [user, setUser]       = useState(null)
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    // Get initial session — always resolve even if Supabase unreachable
-    supabase.auth.getSession()
-      .then(({ data: { session } }) => {
-        setUser(session?.user ?? null)
-        if (session?.user) fetchProfile(session.user.id)
-      })
-      .catch(() => {
-        console.warn('Supabase not configured yet. Add credentials to .env')
-      })
-      .finally(() => setLoading(false))
+  // Fetch profile without blocking auth resolution
+  const fetchProfile = useCallback(async (userId) => {
+    const { data } = await supabase
+      .from('profiles')
+      .select('id,email,full_name,username,bio,headline,location,website,github,linkedin,twitter,avatar_url,skills,theme,is_public')
+      .eq('id', userId)
+      .single()
+    if (data) setProfile(data)
+  }, [])
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      setUser(session?.user ?? null)
-      if (session?.user) {
-        await fetchProfile(session.user.id)
+  useEffect(() => {
+    // onAuthStateChange fires immediately with the stored session (INITIAL_SESSION event)
+    // — no need for a separate getSession() call which would cause double profile fetch
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      const currentUser = session?.user ?? null
+      setUser(currentUser)
+      setLoading(false)           // Unblock UI immediately — don't wait for profile
+
+      if (currentUser) {
+        fetchProfile(currentUser.id) // Load profile in background
       } else {
         setProfile(null)
       }
-      setLoading(false)
     })
 
     return () => subscription.unsubscribe()
-  }, [])
-
-  async function fetchProfile(userId) {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single()
-    setProfile(data)
-  }
+  }, [fetchProfile])
 
   async function signUp(email, password, fullName) {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: {
-        data: { full_name: fullName },
-      },
+      options: { data: { full_name: fullName } },
     })
     return { data, error }
   }
@@ -77,16 +68,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{
-      user,
-      profile,
-      loading,
-      signUp,
-      signIn,
-      signOut,
-      resetPassword,
-      refreshProfile,
-    }}>
+    <AuthContext.Provider value={{ user, profile, loading, signUp, signIn, signOut, resetPassword, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   )
